@@ -107,3 +107,38 @@ class TestAutoencoderKLLTX2VideoMemory(AutoencoderKLLTX2VideoTesterConfig, Memor
 
 class TestAutoencoderKLLTX2VideoSlicingTiling(AutoencoderKLLTX2VideoTesterConfig, AutoencoderTesterMixin):
     """Slicing and tiling tests for AutoencoderKLLTX2Video."""
+
+
+class TestAutoencoderKLLTX2VideoDecoderWidths(AutoencoderKLLTX2VideoTesterConfig):
+    """The decoder must build coherent up-block widths for any decoder_block_out_channels.
+
+    `conv_in` feeds an upsampler built for `out_channels * upscale_factor`, so both the
+    decision to create it and the width it projects onto have to use that same number.
+    Released LTX-2 checkpoints never take the branch, which is why this went unnoticed.
+    """
+
+    def _build(self, decoder_block_out_channels, upsample_factor):
+        init_dict = self.get_init_dict()
+        init_dict["decoder_block_out_channels"] = decoder_block_out_channels
+        init_dict["upsample_factor"] = upsample_factor
+        return AutoencoderKLLTX2Video(**init_dict).to(torch_device).eval()
+
+    def test_matched_ratios_still_build_no_conv_in(self):
+        # The shape released LTX-2 checkpoints use: every block's width divides down to
+        # the next block's input, so conv_in is never needed and the weights are unchanged.
+        model = self._build((16, 32, 64), (2, 2, 2))
+        assert all(block.conv_in is None for block in model.decoder.up_blocks)
+
+    @pytest.mark.parametrize(
+        "decoder_block_out_channels,upsample_factor",
+        [((16, 32, 48), (2, 1, 2)), ((24, 32, 40), (1, 2, 2)), ((16, 24, 64), (2, 2, 1))],
+    )
+    def test_uneven_widths_decode(self, decoder_block_out_channels, upsample_factor):
+        model = self._build(decoder_block_out_channels, upsample_factor)
+        assert any(block.conv_in is not None for block in model.decoder.up_blocks)
+
+        latent = randn_tensor(
+            (1, model.config.latent_channels, 3, 8, 8), device=torch.device(torch_device), dtype=torch.float32
+        )
+        with torch.no_grad():
+            model.decode(latent)

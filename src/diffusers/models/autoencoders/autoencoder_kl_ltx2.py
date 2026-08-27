@@ -597,11 +597,13 @@ class LTX2VideoUpBlock3d(nn.Module):
         if timestep_conditioning:
             self.time_embedder = PixArtAlphaCombinedTimestepSizeEmbeddings(in_channels * 4, 0)
 
+        # conv_in feeds the upsampler, which is built for out_channels * upscale_factor,
+        # so that is the width to compare against and project onto.
         self.conv_in = None
-        if in_channels != out_channels:
+        if in_channels != out_channels * upscale_factor:
             self.conv_in = LTX2VideoResnetBlock3d(
                 in_channels=in_channels,
-                out_channels=out_channels,
+                out_channels=out_channels * upscale_factor,
                 dropout=dropout,
                 eps=resnet_eps,
                 non_linearity=resnet_act_fn,
@@ -929,7 +931,9 @@ class LTX2VideoDecoder3d(nn.Module):
         num_block_out_channels = len(block_out_channels)
         self.up_blocks = nn.ModuleList([])
         for i in range(num_block_out_channels):
-            input_channel = output_channel // upsample_factor[i]
+            # The tensor arriving here is whatever the previous block emitted; the
+            # current block's upsample_factor says nothing about its width.
+            input_channel = output_channel
             output_channel = block_out_channels[i] // upsample_factor[i]
 
             up_block = LTX2VideoUpBlock3d(
